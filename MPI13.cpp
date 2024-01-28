@@ -14,6 +14,7 @@
 
 using namespace std;
 
+
 int typeOf(int rank) {
 	/* 
 		assign to class:
@@ -32,193 +33,150 @@ int typeOf(int rank) {
 	}
 }
 
-int random(int min, int max) //range : [min, max]
-{
-	static bool first = true;
-	if (first)
-	{
-		srand(time(NULL)); //seeding for the first time only!
-		first = false;
-	}
-	return min + rand() % ((max + 1) - min);
+int vote(int size_array, int* pt_array) {
+	// Check no. candidates
+	int check = 0;
+	for (int i = 0; i < size_array; i++) {
+		if (pt_array[i] > -1) check++;
+	}	if (check < 1) return -2; // if there is less than two candidates return -1
+	// Setup random number generator
+	srand(time(NULL));
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::uniform_int_distribution<int> dist(1, size_array);
+	// Vote for candidate
+	int voted_id = 0;
+	while ((typeOf(voted_id) != PROC) && (pt_array[voted_id] < 0)) voted_id = dist(gen);
+	return voted_id;
 }
 
 int main(int argc, char* argv[]) {
-	// helper variables
-	srand(time(NULL));
-	int ile_osob_w_glosowaniu = 0;
-	int rank, size = 0, buf = 0, cnt = 0, glos = 0;
-	int talibcaGlosujaca[100], iniUczestnicy = size, iterator = 0, losowaLiczba = 0;
-	int ostatni_dodatni_glos = 0;
-	int tablica_wynikowa[100], glosowanie=0;
-	
+
+
+	int rank, size;
+
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-	std::random_device rd;
-	std::mt19937 gen(rd());
-	std::uniform_int_distribution<int> dist(1, size);
+	if (size <= 5 || size % 2 == 0) {
+		printf("Invalid input. Please enter a number greater than 5 and odd.\n");
+		MPI_Abort(MPI_COMM_WORLD, 1);
+		MPI_Finalize();
+		return 0;
+	}
+	
+	const int c_size = size;
+	int* voting_array = 0;
+	bool loop_breaker = false;
+	int max = 0, min_vote_lvl;
 
-	int listaDoGlosowania[100];
-	int random_number;
+	char output[500] = "";
 
 	// INIT TASK
 	switch (typeOf(rank)) {
-	case SIEC:
-		// Inicjalizacja tablicy do wyświetlania głosów
-		for (int i = 0; i < 100; i++) {
-			tablica_wynikowa[i] = 0; // nikt nie glosuje
-		}
-		// Wysłanie uczestników głosowania | inicjalizacja
-		for (int i = 1; i < size; i++) {
-			if (typeOf(i) == LICZ) {
-				for (int j = 0; j < size; j++) {
-					if (typeOf(j) == PROC) {
-						MPI_Send(&j, 1, MPI_INT, i, i, MPI_COMM_WORLD); // kto głosuje?
-						// printf("SIEC %d: %d wysyla do %d\n", rank, j, i);
-					}
-				}
-			}
-		}
+	case SIEC: // Send to all LICZ process first 
 		break;
-	case LICZ:
-		iniUczestnicy = (size - 1) / 2 - 1;
-		for (int i = 1; i < size; i++) {
-			talibcaGlosujaca[i] = 0; // nikt nie glosuje
-		}
+	case LICZ: // Setup members rights to voting (0 and above can, below can't voting)
+		voting_array = new int[size] {0};
+		for (int i = 0; i < size; i++) if (typeOf(i) != PROC) voting_array[i] = -1;
+			MPI_Send(voting_array, size, MPI_INT, rank+1, 99, MPI_COMM_WORLD);
 		break;
 	case PROC:
+		voting_array = new int[size] {0};
 		break;
 	default:
 		break;
 	}
 
-	// MAIN LOOP
-	do {
+	for (int xd = 0; xd < 10 && !loop_breaker; xd ++)
+	{
+
 		switch (typeOf(rank)) {
 		case SIEC:
-			for (int i = 0; i < size; i++)
-			{
-				if (typeOf(i) == PROC)
-				{
-					MPI_Recv(&buf, 1, MPI_INT, i, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-					//if (buf == -1) { // koniec głosowania
-					//}
-					//else { // zapisz statystykę otrzymanych głosów
-					//	tablica_wynikowa[buf] += 1;
-					//}
-					for (int j = 0; j < size; j++) { // wyślij do wszystkich infromację o oddanym głosie
-						if (typeOf(j) == LICZ) {
-							MPI_Send(&buf, 1, MPI_INT, j, j, MPI_COMM_WORLD); // glos na
-							// printf("SIEC %d: %d wysyla do %d\n", rank, buf, i);
-						}
-					}
+			int collector1;
+			for (int i = 0; i < size; i++) if (typeOf(i) == PROC) { // collect vote from all participants
+				MPI_Recv(&collector1, 1, MPI_INT, i, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+				for (int j = 0; j < size; j++) if (typeOf(j) == LICZ) { // send to all participants information about vote
+					MPI_Send(&collector1, 1, MPI_INT, j, 99, MPI_COMM_WORLD);
 				}
+				if (collector1 == -2) loop_breaker = true;
+				sprintf_s(output + strlen(output), sizeof(output) - strlen(output), "K%d:%d, ", i, collector1);
 			}
-			//printf("G%d:", glosowanie);
 
-			//for (int i = 0; i < size; i++) // wyświetlanie wyników w postaci histogramu
-			//{
-			//	if (typeOf(i) == PROC) {
-			//		printf(" P%d:%d\t",i, tablica_wynikowa[i]);
-			//		tablica_wynikowa[i] = 0;
-			//	}
-			//}
-			//glosowanie++;
-			//printf("\n");
-
+			// cout << output << endl;
+			memset(output, 0, sizeof(output));
+			MPI_Barrier(MPI_COMM_WORLD);
+			// cout << "SIEC MPI after" << endl;
+			// if (collector1 == -1) { loop_breaker = true; } // if there is signal about end voting exit
 			break;
 		case LICZ:
-			do {
-				MPI_Recv(&buf, 1, MPI_INT, SIEC, rank, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-				if (rank == 1) {
-					printf("LICZ %d: Otrzymalem %d\n", rank, buf);
-				}
-				if (buf == -1){
-					break;
-				}
-				else {
-					//if (talibcaGlosujaca[buf]>=0) {
-						talibcaGlosujaca[buf] = talibcaGlosujaca[buf] + 1;
-					//}
-				}
-			} while (iterator++ < iniUczestnicy);
-			
-			if (rank == 1) {
-				printf("G%d:", glosowanie);
-				for (int i = 0; i < size; i++) { // wyświetlanie wyników w postaci histogramu
-					if (typeOf(i) == PROC) {
-						printf(" P%d:%d\t", i, talibcaGlosujaca[i]);
-					}
-				}
-				glosowanie++;
-				printf("iterator: %d\n", iterator);
-				//printf("LICZ %d: Wysylam do %d\n", rank, rank + 1);
+			int collector;
+			for (int j = 0; j < size; j++) if (typeOf(j) == LICZ) { // Collect votes 
+				MPI_Recv(&collector, 1, MPI_INT, SIEC, 99, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+				if (collector != -1)
+					voting_array[collector]++; // Store in array
+				//cout << "recived2: " << collector << endl;
+				if (collector == -2) { loop_breaker = true; }
 			}
-			// TODO: Dopracowanie selekccji glosujacych
+			//find min
+			min_vote_lvl = size;
 			for (int i = 1; i < size; i++) {
-				if (talibcaGlosujaca[i] > 0) {
-					talibcaGlosujaca[i] = 0;
-				}
-				else {
-					talibcaGlosujaca[i] = -1;
+				if (min_vote_lvl > voting_array[i] && voting_array[i] != 0) {
+					min_vote_lvl = voting_array[i];
 				}
 			}
-			iterator = 0;
-			MPI_Send(talibcaGlosujaca, 100, MPI_INT, rank + 1, rank + 1, MPI_COMM_WORLD);
+			if (true) { // printout information about voting
+				
+				for (int i = 0; i < size; i++) {
+					//if (voting_array[i] != -1)
+						sprintf_s(output + strlen(output), sizeof(output) - strlen(output), "K%d: %s, %d,\t", i, (voting_array[i] <= min_vote_lvl) ? "F" : "A", voting_array[i]);
+				}
+				cout << "L" << rank << " " << output << "glosowannie: " << max++ << endl;
+				memset(output, 0, sizeof(output));
+			}
+
+			for (int i = 1; i < size; i++) {
+				if (voting_array[i] >= min_vote_lvl) {
+					voting_array[i] = 0;
+				}
+				else voting_array[i] = -1;
+			}
+
+			//cout << "LICZ MPI before" << endl;
+			MPI_Barrier(MPI_COMM_WORLD);
+			//cout << "LICZ MPI after" << endl;
+			// if (!loop_breaker)
+			MPI_Send(voting_array, size, MPI_INT, rank + 1, 99, MPI_COMM_WORLD);
+			//cout << "LICZ SEND after" << endl;
 			break;
 		case PROC:
-			MPI_Recv(listaDoGlosowania, 100, MPI_INT, rank - 1, rank, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			if (rank == 2) {
-				//printf("PROC %d: Otrzymalem liste\n", rank);
-			}
-			do {
-				do
-				{
-					random_number = dist(gen);
-				} while (typeOf(random_number)==PROC);
+			int my_candidate;
+			MPI_Recv(voting_array, size, MPI_INT, rank-1, 99, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			my_candidate = vote(size, voting_array);
+			// cout << my_candidate << endl;
+			MPI_Send(&my_candidate, 1, MPI_INT, SIEC, rank, MPI_COMM_WORLD);
+			// cout << "PROC MPI before" << endl;
+			//if (rank == 2) { // printout information about voting
 
-				//random_number = random(1, size);
-			} while (listaDoGlosowania[random_number] >= 0 && random_number != rank);
-			printf("Glos %d na %d\n", rank, random_number);
-
-			ile_osob_w_glosowaniu = 0;
-			for (int i = 0; i < size; i++) {
-				if (listaDoGlosowania[i] >= 0) {
-					ile_osob_w_glosowaniu++;
-					ostatni_dodatni_glos = i;
-				}
-			}
-			// TODO: Jeżeli głosujący zauważy, że jest za mało osób do głosowania, zwraca -1
-			if (ile_osob_w_glosowaniu <= 1) {
-				buf = -1;
-				random_number = -1;
-			}
-			else {
-				buf = 10;
-			}
-			MPI_Send(&random_number, 1, MPI_INT, SIEC, rank, MPI_COMM_WORLD);
-			if (rank == 2) {
-				printf("iloscOsob: %d\n", ile_osob_w_glosowaniu);
-				if (ile_osob_w_glosowaniu == 1) {
-					printf("Wygrywa: %d\n", ostatni_dodatni_glos);
-				}
-			}
-
-			//printf("PROC %d: ilosc_osob: %d, wybiera: %d\n", rank, ile_osob_w_glosowaniu, random_number+1);
-			if (rank == 2 && random_number == -1) {
-				//printf("Wynik glosowania: %d\n", ostatni_dodatni_glos+1);
-			}
+			//	for (int i = 0; i < size; i++) {
+			//		if (voting_array[i] != -1)
+			//			sprintf_s(output + strlen(output), sizeof(output) - strlen(output), " K%d: %s, %d, ", i, (voting_array[i] < 0) ? "F" : "A", voting_array[i]);
+			//	}
+			//	cout << output << ", voted:" << my_candidate << "at " << max++ << endl;
+			//	memset(output, 0, sizeof(output));
+			//}
+			MPI_Barrier(MPI_COMM_WORLD);
+			// cout << "PROC MPI after" << endl;
+			if (my_candidate == -2) { loop_breaker = true; }
 			break;
 		default:
 			break;
 		}
-		
-	} while (buf > 0);
-	
+		// if (typeOf(rank) != SIEC)
+		MPI_Barrier(MPI_COMM_WORLD);
+	}
 
-	// printf("Task: %d Konczy zadanie.\n", rank);
 	MPI_Finalize();
 	return 0;
 }
